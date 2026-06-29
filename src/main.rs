@@ -77,7 +77,7 @@ fn cmd_status() -> Result<()> {
     }
     match state::load()? {
         Some(st) => {
-            let mut line = format!("{} {}", ui::good("●"), ui::good("engaged"));
+            let mut line = ui::good(&ui::mark(ui::Mark::Engaged));
             if let Some(game) = &st.game {
                 line.push_str(&format!("  {}", ui::good(game)));
             }
@@ -86,7 +86,7 @@ fn cmd_status() -> Result<()> {
             }
             println!("\n{line}");
         }
-        None => println!("\n{} {}", ui::dim("○"), ui::dim("idle")),
+        None => println!("\n{}", ui::dim(&ui::mark(ui::Mark::Idle))),
     }
     Ok(())
 }
@@ -141,7 +141,7 @@ fn cmd_engage() -> Result<()> {
     }
     let changed = snapshot.len();
     state::save(&state::State { snapshot, ..Default::default() })?;
-    ui::done("● engaged", &format!("(changed {changed} setting(s))"));
+    ui::done(&ui::mark(ui::Mark::Engaged), &format!("(changed {changed} setting(s))"));
     Ok(())
 }
 
@@ -153,7 +153,7 @@ fn cmd_restore() -> Result<()> {
     };
     knob::restore(&state.snapshot);
     state::clear();
-    ui::done("○ restored", &format!("({} setting(s))", state.snapshot.len()));
+    ui::done(&ui::mark(ui::Mark::Restored), &format!("({} setting(s))", state.snapshot.len()));
     Ok(())
 }
 
@@ -205,7 +205,7 @@ fn cmd_daemon() -> Result<()> {
             && let state::Start::Engaged =
                 engine.on_game_start(pid, &game.name, game.scheduler.as_deref())
         {
-            ui::done("● engaged", &format!("({} already running)", game.name));
+            ui::done(&ui::mark(ui::Mark::Engaged), &format!("({} already running)", game.name));
         }
     }
 
@@ -231,9 +231,9 @@ fn cmd_daemon() -> Result<()> {
                                 log_game(&game.name, pid);
                                 match &game.scheduler {
                                     Some(sched) => {
-                                        ui::done("● engaged", &format!("(scheduler {sched})"))
+                                        ui::done(&ui::mark(ui::Mark::Engaged), &format!("(scheduler {sched})"))
                                     }
-                                    None => println!("{}", ui::good("● engaged")),
+                                    None => println!("{}", ui::good(&ui::mark(ui::Mark::Engaged))),
                                 }
                             }
                             state::Start::Added => log_game(&game.name, pid),
@@ -252,7 +252,7 @@ fn cmd_daemon() -> Result<()> {
             println!("{}", ui::dim("no games left, holding before restore"));
         }
         if engine.tick() {
-            ui::done("○ restored", "(games closed)");
+            ui::done(&ui::mark(ui::Mark::Restored), "(games closed)");
         }
     }
     engine.shutdown();

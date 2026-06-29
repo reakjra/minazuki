@@ -39,6 +39,46 @@ fn mode() -> Mode {
     })
 }
 
+fn emojis() -> bool {
+    static E: OnceLock<bool> = OnceLock::new();
+    *E.get_or_init(|| {
+        matches!(
+            std::env::var("MINAZUKI_EMOJIS").as_deref(),
+            Ok("1" | "true" | "on" | "yes")
+        )
+    })
+}
+
+#[derive(Clone, Copy)]
+pub enum Mark {
+    Engaged,
+    Restored,
+    Idle,
+}
+
+impl Mark {
+    const fn word(self) -> &'static str {
+        match self {
+            Mark::Engaged => "engaged",
+            Mark::Restored => "restored",
+            Mark::Idle => "idle",
+        }
+    }
+
+    fn glyph(self) -> &'static str {
+        match (emojis(), self) {
+            (true, Mark::Engaged) => "🌸",
+            (true, Mark::Restored | Mark::Idle) => "🍂",
+            (false, Mark::Engaged) => "●",
+            (false, Mark::Restored | Mark::Idle) => "○",
+        }
+    }
+}
+
+pub fn mark(m: Mark) -> String {
+    format!("{} {}", m.glyph(), m.word())
+}
+
 fn paint(s: &str, style: &Style) -> String {
     let code = match mode() {
         Mode::Off => return s.to_string(),
