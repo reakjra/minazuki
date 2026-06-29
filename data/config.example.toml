@@ -1,0 +1,8 @@
+# everything here adds to the built-in defaults.
+
+games = []                 # extra game process names
+ignore = []                # extra processes to never treat as a game
+# scheduler = "scx_lavd"   # scx scheduler for any detected game (scxctl list)
+
+[schedulers]               # per-game override, matched on path substring
+# "Black Myth Wukong" = "scx_bpfland"
