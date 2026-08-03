@@ -140,8 +140,14 @@ fn cmd_engage() -> Result<()> {
         return Ok(());
     }
     let changed = snapshot.len();
-    state::save(&state::State { snapshot, ..Default::default() })?;
-    ui::done(&ui::mark(ui::Mark::Engaged), &format!("(changed {changed} setting(s))"));
+    state::save(&state::State {
+        snapshot,
+        ..Default::default()
+    })?;
+    ui::done(
+        &ui::mark(ui::Mark::Engaged),
+        &format!("(changed {changed} setting(s))"),
+    );
     Ok(())
 }
 
@@ -153,7 +159,10 @@ fn cmd_restore() -> Result<()> {
     };
     knob::restore(&state.snapshot);
     state::clear();
-    ui::done(&ui::mark(ui::Mark::Restored), &format!("({} setting(s))", state.snapshot.len()));
+    ui::done(
+        &ui::mark(ui::Mark::Restored),
+        &format!("({} setting(s))", state.snapshot.len()),
+    );
     Ok(())
 }
 
@@ -189,6 +198,30 @@ fn cmd_daemon() -> Result<()> {
     let mut matcher = game::Matcher::new(&config);
     let mut engine = state::Engine::new(knobs());
 
+    if let Some(on) = config.startup_turbo {
+        match turbo::set(on) {
+            Ok(()) => println!(
+                "{}",
+                ui::dim(&format!("startup: turbo {}", if on { "on" } else { "off" }))
+            ),
+            Err(e) => eprintln!("minazuki: startup turbo: {e}"),
+        }
+    }
+
+    if let Some(ref freq_str) = config.startup_freq {
+        match parse_khz(freq_str) {
+            Ok(khz) => match freq::set_max(khz) {
+                Ok(()) => println!(
+                    "{}",
+                    ui::dim(&format!("startup: freq capped at {}", fmt_freq(khz)))
+                ),
+                Err(e) => eprintln!("minazuki: startup freq: {e}"),
+            },
+
+            Err(e) => eprintln!("minazuki: startup freq '{}': {e}", freq_str),
+        }
+    }
+
     if wants_scx && !scx::available() {
         println!(
             "{}",
@@ -205,7 +238,10 @@ fn cmd_daemon() -> Result<()> {
             && let state::Start::Engaged =
                 engine.on_game_start(pid, &game.name, game.scheduler.as_deref())
         {
-            ui::done(&ui::mark(ui::Mark::Engaged), &format!("({} already running)", game.name));
+            ui::done(
+                &ui::mark(ui::Mark::Engaged),
+                &format!("({} already running)", game.name),
+            );
         }
     }
 
@@ -230,9 +266,10 @@ fn cmd_daemon() -> Result<()> {
                             state::Start::Engaged => {
                                 log_game(&game.name, pid);
                                 match &game.scheduler {
-                                    Some(sched) => {
-                                        ui::done(&ui::mark(ui::Mark::Engaged), &format!("(scheduler {sched})"))
-                                    }
+                                    Some(sched) => ui::done(
+                                        &ui::mark(ui::Mark::Engaged),
+                                        &format!("(scheduler {sched})"),
+                                    ),
                                     None => println!("{}", ui::good(&ui::mark(ui::Mark::Engaged))),
                                 }
                             }

@@ -45,7 +45,9 @@ pub fn exists() -> bool {
 }
 
 pub fn recover() -> bool {
-    let Ok(Some(state)) = load() else { return false };
+    let Ok(Some(state)) = load() else {
+        return false;
+    };
     knob::restore(&state.snapshot);
     if state.scheduler.is_some() {
         let _ = scx::stop();
