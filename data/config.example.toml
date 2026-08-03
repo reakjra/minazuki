@@ -6,7 +6,7 @@ ignore = []                # extra processes to never treat as a game
 
 [startup]                  # applied once when the daemon starts
 # cpu_turbo = false        # true = on, false = off
-# cpu_freq = "4.5G"        # any of: "4500M", "4.5G", "4500000K" — all the same
+# cpu_freq = "4.5G"        # any of: "4500M", "4.5G", "4500000K" - all the same
 
 [schedulers]               # per-game override, matched on path substring
 # "Black Myth Wukong" = "scx_bpfland"

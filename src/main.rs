@@ -66,6 +66,22 @@ fn main() -> Result<()> {
 fn cmd_status() -> Result<()> {
     for knob in knobs() {
         println!("{}", ui::head(knob.name()));
+
+
+    let turbo_state = match turbo::state() {
+        Some(true) => ui::good("on"),
+        Some(false) => ui::dim("off"),
+        None => ui::dim("n/a"),
+    };
+    println!("  {:<31} {}", "turbo", turbo_state);
+    if let Some(f) = freq::info() {
+        println!("  {:<31} {} {}", 
+        "freq",
+        ui::good(&format!("max {}", fmt_freq(f.max_khz))),
+        ui::dim(&format!("(hw ceiling {})", fmt_freq(f.hw_max_khz))),
+      );
+    }
+
         let writes = knob.perf_writes()?;
         if writes.is_empty() {
             println!("  {}", ui::dim("(nothing applicable on this machine)"));
@@ -75,6 +91,7 @@ fn cmd_status() -> Result<()> {
             println!("{line}");
         }
     }
+
     match state::load()? {
         Some(st) => {
             let mut line = ui::good(&ui::mark(ui::Mark::Engaged));
