@@ -370,7 +370,7 @@ fn cmd_freq(value: Option<&str>) -> Result<()> {
     }
     let khz = parse_khz(value)?;
     freq::set_max(khz)?;
-    let actual = freq::info().map_or(khz, |f| f.max_khz);
+    let actual = freq::hw_max().map_or(khz, |hw| khz.min(hw));
     if actual < khz {
         ui::done(
             "● freq",

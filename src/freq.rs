@@ -6,12 +6,22 @@ pub struct FreqInfo {
     pub hw_max_khz: u64,
 }
 
+fn peak(file: &str) -> Option<u64> {
+    cpufreq::policies()
+        .iter()
+        .filter_map(|policy| cpufreq::read_khz(&policy.join(file)))
+        .max()
+}
+
 pub fn info() -> Option<FreqInfo> {
-    let policy = cpufreq::policies().into_iter().next()?;
     Some(FreqInfo {
-        max_khz: cpufreq::read_khz(&policy.join("scaling_max_freq"))?,
-        hw_max_khz: cpufreq::read_khz(&policy.join("cpuinfo_max_freq"))?,
+        max_khz: peak("scaling_max_freq")?,
+        hw_max_khz: peak("cpuinfo_max_freq")?,
     })
+}
+
+pub fn hw_max() -> Option<u64> {
+    peak("cpuinfo_max_freq")
 }
 
 pub fn set_max(khz: u64) -> Result<()> {
