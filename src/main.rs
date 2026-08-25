@@ -3,6 +3,7 @@ mod cpufreq;
 mod freq;
 mod game;
 mod knob;
+mod pl;
 mod proc;
 mod scx;
 mod state;
@@ -54,7 +55,7 @@ fn main() -> Result<()> {
         other => {
             eprintln!("minazuki: unknown command '{other}'");
             eprintln!(
-                "usage: minazuki [status|daemon|engage|restore|watch|cpu <turbo|freq> [value]]"
+                "usage: minazuki [status|daemon|engage|restore|watch|cpu <turbo|freq|pl1|pl2> [value]]"
             );
             std::process::exit(2);
         }
@@ -67,20 +68,20 @@ fn cmd_status() -> Result<()> {
     for knob in knobs() {
         println!("{}", ui::head(knob.name()));
 
-
-    let turbo_state = match turbo::state() {
-        Some(true) => ui::good("on"),
-        Some(false) => ui::dim("off"),
-        None => ui::dim("n/a"),
-    };
-    println!("  {:<31} {}", "turbo", turbo_state);
-    if let Some(f) = freq::info() {
-        println!("  {:<31} {} {}", 
-        "freq",
-        ui::good(&format!("max {}", fmt_freq(f.max_khz))),
-        ui::dim(&format!("(hw ceiling {})", fmt_freq(f.hw_max_khz))),
-      );
-    }
+        let turbo_state = match turbo::state() {
+            Some(true) => ui::good("on"),
+            Some(false) => ui::dim("off"),
+            None => ui::dim("n/a"),
+        };
+        println!("  {:<31} {}", "turbo", turbo_state);
+        if let Some(f) = freq::info() {
+            println!(
+                "  {:<31} {} {}",
+                "freq",
+                ui::good(&format!("max {}", fmt_freq(f.max_khz))),
+                ui::dim(&format!("(hw ceiling {})", fmt_freq(f.hw_max_khz))),
+            );
+        }
 
         let writes = knob.perf_writes()?;
         if writes.is_empty() {
@@ -327,7 +328,9 @@ fn cmd_cpu(knob: Option<&str>, value: Option<&str>) -> Result<()> {
         None => cmd_cpu_summary(),
         Some("turbo") => cmd_turbo(value),
         Some("freq") => cmd_freq(value),
-        Some(other) => bail!("unknown cpu control '{other}' (try: turbo, freq)"),
+        Some("pl1") => cmd_power(pl::Limit::Long, value),
+        Some("pl2") => cmd_power(pl::Limit::Short, value),
+        Some(other) => bail!("unknown cpu control '{other}' (try: turbo, freq, pl1, pl2)"),
     }
 }
 
@@ -347,7 +350,79 @@ fn cmd_cpu_summary() -> Result<()> {
         ),
         None => println!("  freq    {}", ui::dim("n/a")),
     }
+    for limit in pl::Limit::ALL {
+        let state = match pl::info(limit) {
+            Some(cap) => ui::good(&fmt_watts(cap.uw)),
+            None => ui::dim("n/a"),
+        };
+        println!("  {:<7} {state}", limit.label());
+    }
     Ok(())
+}
+
+fn cmd_power(limit: pl::Limit, value: Option<&str>) -> Result<()> {
+    let Some(value) = value else {
+        match pl::info(limit) {
+            Some(cap) => println!(
+                "{}: {}{}",
+                limit.label(),
+                ui::good(&fmt_watts(cap.uw)),
+                cap.spec_uw.map_or_else(String::new, |spec| format!(
+                    " {}",
+                    ui::dim(&format!("(spec base {})", fmt_watts(spec)))
+                )),
+            ),
+            None => println!(
+                "{}",
+                ui::dim(&format!("{}: no rapl on this machine", limit.label()))
+            ),
+        }
+        return Ok(());
+    };
+    require_root()?;
+    if value.eq_ignore_ascii_case("reset") {
+        let spec = pl::reset(limit)?;
+        ui::done(
+            &format!("○ {}", limit.label()),
+            &format!("reset to spec base power ({})", fmt_watts(spec)),
+        );
+        return Ok(());
+    }
+    let uw = parse_uw(value)?;
+    pl::set(limit, uw)?;
+    let actual = pl::info(limit).map_or(uw, |cap| cap.uw);
+    let label = format!("● {}", limit.label());
+    if actual == uw {
+        ui::done(&label, &fmt_watts(actual));
+    } else {
+        ui::done(
+            &label,
+            &format!(
+                "requested {}, firmware settled on {}",
+                fmt_watts(uw),
+                fmt_watts(actual)
+            ),
+        );
+    }
+    Ok(())
+}
+
+fn parse_uw(input: &str) -> Result<u64> {
+    let lower = input.trim().to_lowercase();
+    let body = lower.strip_suffix('w').unwrap_or(&lower);
+    let watts: f64 = body
+        .trim()
+        .parse()
+        .with_context(|| format!("not a wattage: '{input}'"))?;
+    if watts <= 0.0 {
+        bail!("wattage must be positive");
+    }
+    Ok((watts * 1_000_000.0) as u64)
+}
+
+fn fmt_watts(uw: u64) -> String {
+    let watts = format!("{:.1}", uw as f64 / 1_000_000.0);
+    format!("{} W", watts.strip_suffix(".0").unwrap_or(&watts))
 }
 
 fn cmd_freq(value: Option<&str>) -> Result<()> {
