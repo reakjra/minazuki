@@ -7,6 +7,8 @@ ignore = []                # extra processes to never treat as a game
 [startup]                  # applied once when the daemon starts
 # cpu_turbo = false        # true = on, false = off
 # cpu_freq = "4.5G"        # any of: "4500M", "4.5G", "4500000K" - all the same
+# cpu_pl1 = "125W"         # rapl long_term package limit, "125" works too
+# cpu_pl2 = "181W"         # rapl short_term package limit
 
 [schedulers]               # per-game override, matched on path substring
 # "Black Myth Wukong" = "scx_bpfland"

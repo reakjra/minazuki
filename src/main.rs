@@ -203,6 +203,13 @@ fn cmd_watch() -> Result<()> {
     }
 }
 
+fn startup_step(label: &str, apply: impl FnOnce() -> Result<String>) {
+    match apply() {
+        Ok(detail) => println!("{}", ui::dim(&format!("startup: {detail}"))),
+        Err(e) => eprintln!("minazuki: startup {label}: {e}"),
+    }
+}
+
 fn cmd_daemon() -> Result<()> {
     require_root()?;
     if let Some(path) = config::ensure_default() {
@@ -216,28 +223,31 @@ fn cmd_daemon() -> Result<()> {
     let mut matcher = game::Matcher::new(&config);
     let mut engine = state::Engine::new(knobs());
 
-    if let Some(on) = config.startup_turbo {
-        match turbo::set(on) {
-            Ok(()) => println!(
-                "{}",
-                ui::dim(&format!("startup: turbo {}", if on { "on" } else { "off" }))
-            ),
-            Err(e) => eprintln!("minazuki: startup turbo: {e}"),
-        }
+    if let Some(on) = config.startup.cpu_turbo {
+        startup_step("turbo", || {
+            turbo::set(on)?;
+            Ok(format!("turbo {}", if on { "on" } else { "off" }))
+        });
     }
 
-    if let Some(ref freq_str) = config.startup_freq {
-        match parse_khz(freq_str) {
-            Ok(khz) => match freq::set_max(khz) {
-                Ok(()) => println!(
-                    "{}",
-                    ui::dim(&format!("startup: freq capped at {}", fmt_freq(khz)))
-                ),
-                Err(e) => eprintln!("minazuki: startup freq: {e}"),
-            },
+    if let Some(value) = &config.startup.cpu_freq {
+        startup_step("freq", || {
+            let khz = parse_khz(value)?;
+            freq::set_max(khz)?;
+            Ok(format!("freq capped at {}", fmt_freq(khz)))
+        });
+    }
 
-            Err(e) => eprintln!("minazuki: startup freq '{}': {e}", freq_str),
-        }
+    for (limit, value) in [
+        (pl::Limit::Long, &config.startup.cpu_pl1),
+        (pl::Limit::Short, &config.startup.cpu_pl2),
+    ] {
+        let Some(value) = value else { continue };
+        startup_step(limit.label(), || {
+            let uw = parse_uw(value)?;
+            pl::set(limit, uw)?;
+            Ok(format!("{} set to {}", limit.label(), fmt_watts(uw)))
+        });
     }
 
     if wants_scx && !scx::available() {

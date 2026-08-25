@@ -23,11 +23,15 @@ struct SystemFile {
 }
 
 #[derive(Deserialize, Default)]
-struct StartupConfig {
+pub struct Startup {
     #[serde(default)]
-    cpu_turbo: Option<bool>,
+    pub cpu_turbo: Option<bool>,
     #[serde(default)]
-    cpu_freq: Option<String>,
+    pub cpu_freq: Option<String>,
+    #[serde(default)]
+    pub cpu_pl1: Option<String>,
+    #[serde(default)]
+    pub cpu_pl2: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -41,7 +45,7 @@ struct UserConfig {
     #[serde(default)]
     schedulers: HashMap<String, String>,
     #[serde(default)]
-    startup: StartupConfig,
+    startup: Startup,
 }
 
 pub struct Config {
@@ -49,8 +53,7 @@ pub struct Config {
     pub game_names: Vec<String>,
     pub default_scheduler: Option<String>,
     pub scheduler_rules: Vec<(String, String)>,
-    pub startup_turbo: Option<bool>,
-    pub startup_freq: Option<String>,
+    pub startup: Startup,
 }
 
 impl Config {
@@ -63,8 +66,7 @@ impl Config {
             .collect();
         let mut default_scheduler = None;
         let mut scheduler_rules = Vec::new();
-        let mut startup_turbo = None;
-        let mut startup_freq = None;
+        let mut startup = Startup::default();
 
         let path = config_path();
         if let Ok(text) = fs::read_to_string(&path) {
@@ -78,8 +80,7 @@ impl Config {
                 .into_iter()
                 .map(|(k, v)| (k.to_lowercase(), v))
                 .collect();
-            startup_freq = user.startup.cpu_freq;
-            startup_turbo = user.startup.cpu_turbo;
+            startup = user.startup;
         }
 
         Ok(Self {
@@ -87,8 +88,7 @@ impl Config {
             game_names,
             default_scheduler,
             scheduler_rules,
-            startup_freq,
-            startup_turbo,
+            startup,
         })
     }
 }
