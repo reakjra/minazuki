@@ -1,5 +1,15 @@
-custom cpu governor. yeah thats it. maybe a little more of a cpu governor but yeah. idea from falcond. genuinely made just for me
+cpu management daemon
 
-config with per-game scx loader, cpu freq/turbo boost knobs
+\- per-process scx scheduler loader
 
-clone, make install, sudo systemctl daemon-reload, sudo systemctl enable --now minazuki
+\- cpu startup config, freq, pl1 and pl2 setter
+
+config: `/etc/minazuki/config.toml`
+
+```
+git clone https://github.com/reakjra/minazuki && cd minazuki
+make build
+sudo make install
+sudo systemctl daemon-reload
+sudo systemctl enable --now minazuki
+```
