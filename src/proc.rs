@@ -73,3 +73,9 @@ fn basename(path: &[u8]) -> &[u8] {
         None => path,
     }
 }
+
+pub fn argv0(pid: u32) -> Option<String> {
+    let bytes = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let first = bytes.split(|&b| b == 0).next()?;
+    (!first.is_empty()).then(|| String::from_utf8_lossy(first).into_owned())
+}

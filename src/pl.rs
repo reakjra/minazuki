@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+use crate::knob::{self, PerfWrite};
+use anyhow::{Context, Result, bail, ensure};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -25,6 +26,13 @@ impl Limit {
         match self {
             Limit::Long => "long_term",
             Limit::Short => "short_term",
+        }
+    }
+
+    const fn refusal(self) -> &'static str {
+        match self {
+            Limit::Long => "firmware has the rapl pl1 limit locked",
+            Limit::Short => "firmware has the rapl pl2 limit locked",
         }
     }
 }
@@ -61,19 +69,22 @@ pub fn info(limit: Limit) -> Option<Cap> {
     })
 }
 
-pub fn set(limit: Limit, uw: u64) -> Result<()> {
-    let (zone, i) = constraint(limit)
-        .with_context(|| format!("no rapl {} constraint on this machine", limit.label()))?;
+pub fn writes(limit: Limit, uw: u64) -> Vec<PerfWrite> {
+    let Some((zone, i)) = constraint(limit) else {
+        return Vec::new();
+    };
     let path = zone.join(format!("constraint_{i}_power_limit_uw"));
-    fs::write(&path, uw.to_string()).map_err(|e| match e.kind() {
-        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::InvalidInput => {
-            anyhow::anyhow!(
-                "kernel refused: firmware has the rapl {} limit locked",
-                limit.label()
-            )
-        }
-        _ => anyhow::Error::new(e).context(format!("write {}", path.display())),
-    })
+    vec![PerfWrite::new(path, uw.to_string()).refusal(limit.refusal())]
+}
+
+pub fn set(limit: Limit, uw: u64) -> Result<()> {
+    let writes = writes(limit, uw);
+    ensure!(
+        !writes.is_empty(),
+        "no rapl {} constraint on this machine",
+        limit.label()
+    );
+    knob::write_all(&writes)
 }
 
 pub fn reset(limit: Limit) -> Result<u64> {
@@ -82,6 +93,24 @@ pub fn reset(limit: Limit) -> Result<u64> {
         .with_context(|| format!("no spec base power reported for {}", limit.label()))?;
     set(limit, spec)?;
     Ok(spec)
+}
+
+pub fn parse(input: &str) -> Result<u64> {
+    let lower = input.trim().to_lowercase();
+    let body = lower.strip_suffix('w').unwrap_or(&lower);
+    let watts: f64 = body
+        .trim()
+        .parse()
+        .with_context(|| format!("not a wattage: '{input}'"))?;
+    if watts <= 0.0 {
+        bail!("wattage must be positive");
+    }
+    Ok((watts * 1_000_000.0) as u64)
+}
+
+pub fn fmt(uw: u64) -> String {
+    let watts = format!("{:.1}", uw as f64 / 1_000_000.0);
+    format!("{} W", watts.strip_suffix(".0").unwrap_or(&watts))
 }
 
 fn read_trim(path: &Path) -> Option<String> {

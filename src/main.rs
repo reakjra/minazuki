@@ -2,6 +2,7 @@ mod config;
 mod cpufreq;
 mod freq;
 mod game;
+mod inotify;
 mod knob;
 mod pl;
 mod proc;
@@ -11,10 +12,8 @@ mod turbo;
 mod ui;
 mod watcher;
 
-use anyhow::{Context, Result, bail};
-use knob::cpu::Cpu;
-use knob::{Knob, PerfWrite};
-use std::fs;
+use anyhow::{Result, bail};
+use knob::Tuning;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -36,10 +35,6 @@ fn install_signal_handlers() {
     }
 }
 
-fn knobs() -> Vec<Box<dyn Knob>> {
-    vec![Box::new(Cpu)]
-}
-
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = args.first().map(String::as_str).unwrap_or("status");
@@ -47,6 +42,7 @@ fn main() -> Result<()> {
     println!();
     let result = match cmd {
         "status" => cmd_status(),
+        "config" => cmd_config(),
         "engage" => cmd_engage(),
         "restore" => cmd_restore(),
         "watch" => cmd_watch(),
@@ -55,7 +51,7 @@ fn main() -> Result<()> {
         other => {
             eprintln!("minazuki: unknown command '{other}'");
             eprintln!(
-                "usage: minazuki [status|daemon|engage|restore|watch|cpu <turbo|freq|pl1|pl2> [value]]"
+                "usage: minazuki [status|config|daemon|engage|restore|watch|cpu <turbo|freq|pl1|pl2> [value]]"
             );
             std::process::exit(2);
         }
@@ -65,83 +61,71 @@ fn main() -> Result<()> {
 }
 
 fn cmd_status() -> Result<()> {
-    for knob in knobs() {
-        println!("{}", ui::head(knob.name()));
-
-        let turbo_state = match turbo::state() {
-            Some(true) => ui::good("on"),
-            Some(false) => ui::dim("off"),
-            None => ui::dim("n/a"),
-        };
-        println!("  {:<31} {}", "turbo", turbo_state);
-        if let Some(f) = freq::info() {
-            println!(
-                "  {:<31} {} {}",
-                "freq",
-                ui::good(&format!("max {}", fmt_freq(f.max_khz))),
-                ui::dim(&format!("(hw ceiling {})", fmt_freq(f.hw_max_khz))),
-            );
-        }
-
-        let writes = knob.perf_writes()?;
-        if writes.is_empty() {
-            println!("  {}", ui::dim("(nothing applicable on this machine)"));
-            continue;
-        }
-        for line in summarize(&writes) {
-            println!("{line}");
-        }
-    }
-
+    cmd_cpu_summary()?;
     match state::load()? {
-        Some(st) => {
-            let mut line = ui::good(&ui::mark(ui::Mark::Engaged));
-            if let Some(game) = &st.game {
-                line.push_str(&format!("  {}", ui::good(game)));
-            }
-            if let Some(scheduler) = &st.scheduler {
-                line.push_str(&format!("  {}", ui::dim(&format!("via {scheduler}"))));
-            }
-            println!("\n{line}");
-        }
+        Some(st) => println!("\n{}", engaged_line(&st)),
         None => println!("\n{}", ui::dim(&ui::mark(ui::Mark::Idle))),
     }
     Ok(())
 }
 
-fn summarize(writes: &[PerfWrite]) -> Vec<String> {
-    let mut groups: Vec<(String, String, String, usize)> = Vec::new();
-    for w in writes {
-        let name = w.path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
-        let cur = fs::read_to_string(&w.path)
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|_| "?".into());
-        match groups
-            .iter_mut()
-            .find(|g| g.0 == name && g.1 == cur && g.2 == w.value)
-        {
-            Some(g) => g.3 += 1,
-            None => groups.push((name.to_string(), cur, w.value.clone(), 1)),
-        }
+fn engaged_line(st: &state::State) -> String {
+    let mut line = ui::good(&ui::mark(ui::Mark::Engaged));
+    if let Some(game) = &st.game {
+        line.push_str(&format!("  {}", ui::good(game)));
     }
-    groups
-        .iter()
-        .map(|(name, cur, target, count)| format_row(name, cur, target, *count))
-        .collect()
+    if let Some(scheduler) = &st.scheduler {
+        line.push_str(&format!("  {}", ui::dim(&format!("via {scheduler}"))));
+    }
+    if let Some(profile) = &st.profile {
+        line.push_str(&format!("  {} {}", ui::dim("profile:"), ui::good(profile)));
+    }
+    line
 }
 
-fn format_row(name: &str, cur: &str, target: &str, count: usize) -> String {
-    let tag = if count > 1 {
-        ui::dim(&format!("  ×{count}"))
-    } else {
-        String::new()
-    };
-    let body = if cur == target {
-        format!("{}  {}", ui::good(cur), ui::dim("(already set)"))
-    } else {
-        format!("{} {} {}", ui::dim(cur), ui::dim("→"), ui::good(target))
-    };
-    format!("  {name:<31} {body}{tag}")
+fn cmd_config() -> Result<()> {
+    let config = config::Config::load()?;
+    let path = config::path();
+    println!("{}", ui::head(&path.display().to_string()));
+    if !path.exists() {
+        println!("  {}", ui::dim("(no file yet, showing built-in defaults)"));
+    }
+
+    if !config.startup.is_empty() {
+        println!("\n{}", ui::head("startup"));
+        println!("  {}", ui::dim("applied once at boot, never restored"));
+        print_rows(&config.startup);
+    }
+
+    println!("\n{}", ui::head("default"));
+    print_profile(config.default_scheduler.as_deref(), &config.default_tuning);
+    for rule in &config.rules {
+        println!("\n{}", ui::head(&rule.path));
+        print_profile(rule.scheduler.as_deref(), &rule.tuning);
+    }
+    Ok(())
+}
+
+fn print_profile(scheduler: Option<&str>, tuning: &Tuning) {
+    match scheduler {
+        Some(sched) => row("scheduler", ui::good(sched)),
+        None => row("scheduler", ui::dim("(left alone)")),
+    }
+    print_rows(tuning);
+}
+
+fn print_rows(tuning: &Tuning) {
+    for (label, value) in tuning.rows() {
+        row(label, ui::good(&value));
+    }
+}
+
+fn turbo_state() -> String {
+    match turbo::state() {
+        Some(true) => ui::good("on"),
+        Some(false) => ui::dim("off"),
+        None => ui::dim("n/a"),
+    }
 }
 
 fn cmd_engage() -> Result<()> {
@@ -149,7 +133,8 @@ fn cmd_engage() -> Result<()> {
     if state::exists() {
         bail!("already engaged (state file exists); run `restore` first");
     }
-    let snapshot = knob::engage(&knobs())?;
+    let config = config::Config::load()?;
+    let snapshot = knob::engage(&config.default_tuning.knobs())?;
     if snapshot.is_empty() {
         println!(
             "{}",
@@ -203,13 +188,6 @@ fn cmd_watch() -> Result<()> {
     }
 }
 
-fn startup_step(label: &str, apply: impl FnOnce() -> Result<String>) {
-    match apply() {
-        Ok(detail) => println!("{}", ui::dim(&format!("startup: {detail}"))),
-        Err(e) => eprintln!("minazuki: startup {label}: {e}"),
-    }
-}
-
 fn cmd_daemon() -> Result<()> {
     require_root()?;
     if let Some(path) = config::ensure_default() {
@@ -219,36 +197,16 @@ fn cmd_daemon() -> Result<()> {
         );
     }
     let config = config::Config::load()?;
-    let wants_scx = config.default_scheduler.is_some() || !config.scheduler_rules.is_empty();
-    let mut matcher = game::Matcher::new(&config);
-    let mut engine = state::Engine::new(knobs());
-
-    if let Some(on) = config.startup.cpu_turbo {
-        startup_step("turbo", || {
-            turbo::set(on)?;
-            Ok(format!("turbo {}", if on { "on" } else { "off" }))
-        });
+    let wants_scx = config.wants_scx();
+    if !config.startup.is_empty() {
+        let applied = knob::engage(&config.startup.knobs())?.len();
+        println!(
+            "{}",
+            ui::dim(&format!("startup: applied {applied} setting(s)"))
+        );
     }
-
-    if let Some(value) = &config.startup.cpu_freq {
-        startup_step("freq", || {
-            let khz = parse_khz(value)?;
-            freq::set_max(khz)?;
-            Ok(format!("freq capped at {}", fmt_freq(khz)))
-        });
-    }
-
-    for (limit, value) in [
-        (pl::Limit::Long, &config.startup.cpu_pl1),
-        (pl::Limit::Short, &config.startup.cpu_pl2),
-    ] {
-        let Some(value) = value else { continue };
-        startup_step(limit.label(), || {
-            let uw = parse_uw(value)?;
-            pl::set(limit, uw)?;
-            Ok(format!("{} set to {}", limit.label(), fmt_watts(uw)))
-        });
-    }
+    let mut matcher = game::Matcher::new(config);
+    let mut engine = state::Engine::default();
 
     if wants_scx && !scx::available() {
         println!(
@@ -263,8 +221,7 @@ fn cmd_daemon() -> Result<()> {
     }
     for pid in proc::pids() {
         if let Some(game) = matcher.detect(pid)
-            && let state::Start::Engaged =
-                engine.on_game_start(pid, &game.name, game.scheduler.as_deref())
+            && let state::Start::Engaged = engine.on_game_start(pid, &game)
         {
             ui::done(
                 &ui::mark(ui::Mark::Engaged),
@@ -274,13 +231,21 @@ fn cmd_daemon() -> Result<()> {
     }
 
     let watcher = watcher::Watcher::new()?;
+    let config_watch = match inotify::Watch::new(&config::path()) {
+        Ok(watch) => Some(watch),
+        Err(e) => {
+            eprintln!("minazuki: config watch unavailable ({e}), use `systemctl reload minazuki`");
+            None
+        }
+    };
     install_signal_handlers();
     println!("{}", ui::head("minazuki daemon running"));
     while !STOP.load(Ordering::SeqCst) {
-        if RELOAD.swap(false, Ordering::SeqCst) {
+        let edited = config_watch.as_ref().is_some_and(inotify::Watch::touched);
+        if RELOAD.swap(false, Ordering::SeqCst) || edited {
             match config::Config::load() {
                 Ok(cfg) => {
-                    matcher = game::Matcher::new(&cfg);
+                    matcher = game::Matcher::new(cfg);
                     println!("{}", ui::dim("config reloaded"));
                 }
                 Err(e) => eprintln!("minazuki: config reload failed: {e}"),
@@ -290,7 +255,7 @@ fn cmd_daemon() -> Result<()> {
             match event {
                 watcher::Event::Exec { pid } => {
                     if let Some(game) = matcher.detect(pid) {
-                        match engine.on_game_start(pid, &game.name, game.scheduler.as_deref()) {
+                        match engine.on_game_start(pid, &game) {
                             state::Start::Engaged => {
                                 log_game(&game.name, pid);
                                 match &game.scheduler {
@@ -345,29 +310,64 @@ fn cmd_cpu(knob: Option<&str>, value: Option<&str>) -> Result<()> {
 }
 
 fn cmd_cpu_summary() -> Result<()> {
+    let target = config::Config::load()
+        .ok()
+        .filter(|c| c.default_tuning.governor.unwrap_or(false))
+        .map(|_| "performance");
     println!("{}", ui::head("cpu"));
-    let turbo_state = match turbo::state() {
-        Some(true) => ui::good("on"),
-        Some(false) => ui::dim("off"),
-        None => ui::dim("n/a"),
-    };
-    println!("  turbo   {turbo_state}");
+    row("turbo", turbo_state());
     match freq::info() {
-        Some(f) => println!(
-            "  freq    {} {}",
-            ui::good(&format!("max {}", fmt_freq(f.max_khz))),
-            ui::dim(&format!("(hw ceiling {})", fmt_freq(f.hw_max_khz))),
+        Some(f) => row(
+            "freq",
+            format!(
+                "{} {}",
+                ui::good(&format!("max {}", freq::fmt(f.max_khz))),
+                ui::dim(&format!("(hw ceiling {})", freq::fmt(f.hw_max_khz))),
+            ),
         ),
-        None => println!("  freq    {}", ui::dim("n/a")),
+        None => row("freq", ui::dim("n/a")),
     }
     for limit in pl::Limit::ALL {
         let state = match pl::info(limit) {
-            Some(cap) => ui::good(&fmt_watts(cap.uw)),
+            Some(cap) => ui::good(&pl::fmt(cap.uw)),
             None => ui::dim("n/a"),
         };
-        println!("  {:<7} {state}", limit.label());
+        row(limit.label(), state);
     }
+    row("scaling_governor", tallied("scaling_governor", target));
+    row(
+        "energy_performance_preference",
+        tallied("energy_performance_preference", target),
+    );
     Ok(())
+}
+
+fn row(label: &str, value: String) {
+    println!("  {label:<31} {value}");
+}
+
+fn tallied(file: &str, target: Option<&str>) -> String {
+    let groups = cpufreq::tally(file);
+    if groups.is_empty() {
+        return ui::dim("n/a");
+    }
+    groups
+        .iter()
+        .map(|(value, count)| {
+            let body = match target {
+                Some(target) if target != value => {
+                    format!("{} {} {}", ui::dim(value), ui::dim("→"), ui::good(target))
+                }
+                Some(_) => format!("{}  {}", ui::good(value), ui::dim("(already set)")),
+                None => ui::good(value),
+            };
+            match count {
+                1 => body,
+                n => format!("{body} {}", ui::dim(&format!("×{n}"))),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn cmd_power(limit: pl::Limit, value: Option<&str>) -> Result<()> {
@@ -376,10 +376,10 @@ fn cmd_power(limit: pl::Limit, value: Option<&str>) -> Result<()> {
             Some(cap) => println!(
                 "{}: {}{}",
                 limit.label(),
-                ui::good(&fmt_watts(cap.uw)),
+                ui::good(&pl::fmt(cap.uw)),
                 cap.spec_uw.map_or_else(String::new, |spec| format!(
                     " {}",
-                    ui::dim(&format!("(spec base {})", fmt_watts(spec)))
+                    ui::dim(&format!("(spec base {})", pl::fmt(spec)))
                 )),
             ),
             None => println!(
@@ -394,45 +394,27 @@ fn cmd_power(limit: pl::Limit, value: Option<&str>) -> Result<()> {
         let spec = pl::reset(limit)?;
         ui::done(
             &format!("○ {}", limit.label()),
-            &format!("reset to spec base power ({})", fmt_watts(spec)),
+            &format!("reset to spec base power ({})", pl::fmt(spec)),
         );
         return Ok(());
     }
-    let uw = parse_uw(value)?;
+    let uw = pl::parse(value)?;
     pl::set(limit, uw)?;
     let actual = pl::info(limit).map_or(uw, |cap| cap.uw);
     let label = format!("● {}", limit.label());
     if actual == uw {
-        ui::done(&label, &fmt_watts(actual));
+        ui::done(&label, &pl::fmt(actual));
     } else {
         ui::done(
             &label,
             &format!(
                 "requested {}, firmware settled on {}",
-                fmt_watts(uw),
-                fmt_watts(actual)
+                pl::fmt(uw),
+                pl::fmt(actual)
             ),
         );
     }
     Ok(())
-}
-
-fn parse_uw(input: &str) -> Result<u64> {
-    let lower = input.trim().to_lowercase();
-    let body = lower.strip_suffix('w').unwrap_or(&lower);
-    let watts: f64 = body
-        .trim()
-        .parse()
-        .with_context(|| format!("not a wattage: '{input}'"))?;
-    if watts <= 0.0 {
-        bail!("wattage must be positive");
-    }
-    Ok((watts * 1_000_000.0) as u64)
-}
-
-fn fmt_watts(uw: u64) -> String {
-    let watts = format!("{:.1}", uw as f64 / 1_000_000.0);
-    format!("{} W", watts.strip_suffix(".0").unwrap_or(&watts))
 }
 
 fn cmd_freq(value: Option<&str>) -> Result<()> {
@@ -440,8 +422,8 @@ fn cmd_freq(value: Option<&str>) -> Result<()> {
         match freq::info() {
             Some(f) => println!(
                 "freq: max {} (hw ceiling {})",
-                ui::good(&fmt_freq(f.max_khz)),
-                ui::dim(&fmt_freq(f.hw_max_khz)),
+                ui::good(&freq::fmt(f.max_khz)),
+                ui::dim(&freq::fmt(f.hw_max_khz)),
             ),
             None => println!("{}", ui::dim("freq: no cpufreq on this machine")),
         }
@@ -453,7 +435,7 @@ fn cmd_freq(value: Option<&str>) -> Result<()> {
         ui::done("○ freq", "reset to hardware max");
         return Ok(());
     }
-    let khz = parse_khz(value)?;
+    let khz = freq::parse(value)?;
     freq::set_max(khz)?;
     let actual = freq::hw_max().map_or(khz, |hw| khz.min(hw));
     if actual < khz {
@@ -461,41 +443,14 @@ fn cmd_freq(value: Option<&str>) -> Result<()> {
             "● freq",
             &format!(
                 "requested {}, clamped to {} (hw ceiling)",
-                fmt_freq(khz),
-                fmt_freq(actual)
+                freq::fmt(khz),
+                freq::fmt(actual)
             ),
         );
     } else {
-        ui::done("● freq", &format!("max {}", fmt_freq(actual)));
+        ui::done("● freq", &format!("max {}", freq::fmt(actual)));
     }
     Ok(())
-}
-
-fn parse_khz(input: &str) -> Result<u64> {
-    let lower = input.trim().to_lowercase();
-    let body = lower.strip_suffix("hz").unwrap_or(&lower);
-    let (digits, mult): (&str, f64) = if let Some(n) = body.strip_suffix('g') {
-        (n, 1_000_000.0)
-    } else if let Some(n) = body.strip_suffix('m') {
-        (n, 1_000.0)
-    } else if let Some(n) = body.strip_suffix('k') {
-        (n, 1.0)
-    } else {
-        let ghz_ish = body.contains('.') || body.parse::<f64>().map(|v| v <= 10.0).unwrap_or(false);
-        (body, if ghz_ish { 1_000_000.0 } else { 1_000.0 })
-    };
-    let value: f64 = digits
-        .trim()
-        .parse()
-        .with_context(|| format!("not a frequency: '{input}'"))?;
-    if value <= 0.0 {
-        bail!("frequency must be positive");
-    }
-    Ok((value * mult) as u64)
-}
-
-fn fmt_freq(khz: u64) -> String {
-    format!("{:.2} GHz", khz as f64 / 1_000_000.0)
 }
 
 fn cmd_turbo(value: Option<&str>) -> Result<()> {
@@ -508,7 +463,7 @@ fn cmd_turbo(value: Option<&str>) -> Result<()> {
         return Ok(());
     };
     require_root()?;
-    let on = parse_onoff(value)?;
+    let on = turbo::parse(value)?;
     turbo::set(on)?;
     ui::done(
         if on { "● turbo" } else { "○ turbo" },
@@ -517,17 +472,44 @@ fn cmd_turbo(value: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn parse_onoff(value: &str) -> Result<bool> {
-    match value.to_lowercase().as_str() {
-        "on" | "true" | "1" | "enable" => Ok(true),
-        "off" | "false" | "0" | "disable" => Ok(false),
-        other => bail!("expected on/off, got '{other}'"),
-    }
-}
-
 fn require_root() -> Result<()> {
     if unsafe { libc::geteuid() } != 0 {
         bail!("needs root to write sysfs. try: sudo minazuki <cmd>");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn engaged_line_tags_the_matched_profile() {
+        let st = state::State {
+            game: Some("Wukong.exe".into()),
+            scheduler: Some("scx_lavd".into()),
+            profile: Some("black myth - wukong".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            engaged_line(&st),
+            format!(
+                "{}  Wukong.exe  via scx_lavd  profile: black myth - wukong",
+                ui::mark(ui::Mark::Engaged)
+            )
+        );
+    }
+
+    #[test]
+    fn engaged_line_stays_short_on_the_default_profile() {
+        let st = state::State {
+            game: Some("cs2".into()),
+            scheduler: Some("scx_cake".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            engaged_line(&st),
+            format!("{}  cs2  via scx_cake", ui::mark(ui::Mark::Engaged))
+        );
+    }
 }

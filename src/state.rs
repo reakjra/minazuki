@@ -1,4 +1,5 @@
-use crate::knob::{self, Knob, Snapshot};
+use crate::game::Game;
+use crate::knob::{self, Snapshot};
 use crate::{proc, scx};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,8 @@ pub struct State {
     pub game: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scheduler: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 pub fn save(state: &State) -> Result<()> {
@@ -62,34 +65,23 @@ pub enum Start {
     Known,
 }
 
+#[derive(Default)]
 pub struct Engine {
-    knobs: Vec<Box<dyn Knob>>,
     active: HashSet<u32>,
     snapshot: Option<Snapshot>,
     game: Option<String>,
+    profile: Option<String>,
     scheduler: Option<String>,
     scx_managed: bool,
     pending_off: Option<Instant>,
 }
 
 impl Engine {
-    pub fn new(knobs: Vec<Box<dyn Knob>>) -> Self {
-        Self {
-            knobs,
-            active: HashSet::new(),
-            snapshot: None,
-            game: None,
-            scheduler: None,
-            scx_managed: false,
-            pending_off: None,
-        }
-    }
-
-    pub fn on_game_start(&mut self, pid: u32, name: &str, scheduler: Option<&str>) -> Start {
+    pub fn on_game_start(&mut self, pid: u32, game: &Game) -> Start {
         self.pending_off = None;
         let newly = self.active.insert(pid);
         if self.snapshot.is_none() {
-            self.engage(name, scheduler);
+            self.engage(game);
             Start::Engaged
         } else if newly {
             Start::Added
@@ -146,19 +138,20 @@ impl Engine {
         }
     }
 
-    fn engage(&mut self, name: &str, scheduler: Option<&str>) {
-        self.snapshot = Some(knob::engage(&self.knobs).unwrap_or_default());
-        self.game = Some(name.to_string());
+    fn engage(&mut self, game: &Game) {
+        self.snapshot = Some(knob::engage(&game.tuning.knobs()).unwrap_or_default());
+        self.game = Some(game.name.clone());
+        self.profile = game.profile.clone();
 
         self.scheduler = None;
         self.scx_managed = false;
-        if let Some(sched) = scheduler
+        if let Some(sched) = &game.scheduler
             && scx::is_idle()
         {
             match scx::start_gaming(sched) {
                 Ok(()) => {
                     self.scx_managed = true;
-                    self.scheduler = Some(sched.to_string());
+                    self.scheduler = Some(sched.clone());
                 }
                 Err(e) => eprintln!("minazuki: scx start failed: {e}"),
             }
@@ -171,6 +164,7 @@ impl Engine {
             snapshot: self.snapshot.clone().unwrap_or_default(),
             game: self.game.clone(),
             scheduler: self.scheduler.clone(),
+            profile: self.profile.clone(),
         };
         let _ = save(&state);
     }
@@ -186,6 +180,7 @@ impl Engine {
             self.scx_managed = false;
         }
         self.game = None;
+        self.profile = None;
         self.scheduler = None;
         self.pending_off = None;
         clear();

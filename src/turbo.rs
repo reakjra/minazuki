@@ -1,9 +1,11 @@
-use anyhow::{Context, Result};
+use crate::knob::{self, PerfWrite};
+use anyhow::{Result, ensure};
 use std::fs;
 use std::path::Path;
 
 const INTEL_NO_TURBO: &str = "/sys/devices/system/cpu/intel_pstate/no_turbo";
 const CPUFREQ_BOOST: &str = "/sys/devices/system/cpu/cpufreq/boost";
+const REFUSAL: &str = "turbo is disabled in BIOS/firmware, software can't override it";
 
 enum Control {
     NoTurbo,
@@ -27,19 +29,27 @@ pub fn state() -> Option<bool> {
     }
 }
 
-pub fn set(on: bool) -> Result<()> {
-    let result = match control().context("no turbo control on this machine")? {
-        Control::NoTurbo => fs::write(INTEL_NO_TURBO, if on { "0" } else { "1" }),
-        Control::Boost => fs::write(CPUFREQ_BOOST, if on { "1" } else { "0" }),
+pub fn writes(on: bool) -> Vec<PerfWrite> {
+    let (path, value) = match control() {
+        Some(Control::NoTurbo) => (INTEL_NO_TURBO, if on { "0" } else { "1" }),
+        Some(Control::Boost) => (CPUFREQ_BOOST, if on { "1" } else { "0" }),
+        None => return Vec::new(),
     };
-    result.map_err(|e| match e.kind() {
-        std::io::ErrorKind::PermissionDenied => {
-            anyhow::anyhow!(
-                "kernel refused: turbo is disabled in BIOS/firmware, software can't override it"
-            )
-        }
-        _ => anyhow::Error::new(e).context("write turbo control"),
-    })
+    vec![PerfWrite::new(path, value).refusal(REFUSAL)]
+}
+
+pub fn set(on: bool) -> Result<()> {
+    let writes = writes(on);
+    ensure!(!writes.is_empty(), "no turbo control on this machine");
+    knob::write_all(&writes)
+}
+
+pub fn parse(value: &str) -> Result<bool> {
+    match value.to_lowercase().as_str() {
+        "on" | "true" | "1" | "enable" => Ok(true),
+        "off" | "false" | "0" | "disable" => Ok(false),
+        other => anyhow::bail!("expected on/off, got '{other}'"),
+    }
 }
 
 fn read(path: &str) -> Option<u8> {

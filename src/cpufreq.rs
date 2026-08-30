@@ -23,3 +23,18 @@ pub fn policies() -> Vec<PathBuf> {
 pub fn read_khz(path: &Path) -> Option<u64> {
     fs::read_to_string(path).ok()?.trim().parse().ok()
 }
+
+pub fn tally(file: &str) -> Vec<(String, usize)> {
+    let mut out: Vec<(String, usize)> = Vec::new();
+    for policy in policies() {
+        let Ok(value) = fs::read_to_string(policy.join(file)) else {
+            continue;
+        };
+        let value = value.trim().to_string();
+        match out.iter_mut().find(|(seen, _)| *seen == value) {
+            Some((_, count)) => *count += 1,
+            None => out.push((value, 1)),
+        }
+    }
+    out
+}
