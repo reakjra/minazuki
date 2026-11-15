@@ -219,16 +219,7 @@ fn cmd_daemon() -> Result<()> {
     if state::recover() {
         println!("{}", ui::dim("recovered stale state from a previous run"));
     }
-    for pid in proc::pids() {
-        if let Some(game) = matcher.detect(pid)
-            && let state::Start::Engaged = engine.on_game_start(pid, &game)
-        {
-            ui::done(
-                &ui::mark(ui::Mark::Engaged),
-                &format!("({} already running)", game.name),
-            );
-        }
-    }
+    adopt_running(&matcher, &mut engine);
 
     let watcher = watcher::Watcher::new()?;
     let config_watch = match inotify::Watch::new(&config::path()) {
@@ -247,6 +238,7 @@ fn cmd_daemon() -> Result<()> {
                 Ok(cfg) => {
                     matcher = game::Matcher::new(cfg);
                     println!("{}", ui::dim("config reloaded"));
+                    adopt_running(&matcher, &mut engine);
                 }
                 Err(e) => eprintln!("minazuki: config reload failed: {e}"),
             }
@@ -288,6 +280,19 @@ fn cmd_daemon() -> Result<()> {
     engine.shutdown();
     println!("{}", ui::dim("stopped, cpu restored"));
     Ok(())
+}
+
+fn adopt_running(matcher: &game::Matcher, engine: &mut state::Engine) {
+    for pid in proc::pids() {
+        if let Some(game) = matcher.detect(pid)
+            && let state::Start::Engaged = engine.on_game_start(pid, &game)
+        {
+            ui::done(
+                &ui::mark(ui::Mark::Engaged),
+                &format!("({} already running)", game.name),
+            );
+        }
+    }
 }
 
 fn log_game(name: &str, pid: u32) {
