@@ -1,5 +1,5 @@
 [Unit]
-Description=minazuki auto game-mode daemon
+Description=minazuki cpu management daemon
 After=dbus.service
 Wants=dbus.service
 

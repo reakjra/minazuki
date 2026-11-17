@@ -4,7 +4,7 @@ use crate::proc;
 
 const PROTON_PARENTS: &[&str] = &["wine", "reaper", "umu-run"];
 
-pub struct Game {
+pub struct Process {
     pub name: String,
     pub profile: Option<String>,
     pub scheduler: Option<String>,
@@ -20,17 +20,17 @@ impl Matcher {
         Self { config }
     }
 
-    pub fn detect(&self, pid: u32) -> Option<Game> {
+    pub fn detect(&self, pid: u32) -> Option<Process> {
         let name = proc::name(pid)?;
         let lower = name.to_lowercase();
         let rule = self.rule_for(pid);
         let launched_from_rule = rule.is_some_and(|rule| {
             proc::argv0(pid).is_some_and(|argv0| argv0.to_lowercase().contains(&rule.path))
         });
-        let is_game = self.config.game_names.contains(&lower)
+        let matched = self.config.game_names.contains(&lower)
             || (!self.config.system_exes.contains(&lower)
                 && (launched_from_rule || (proc::is_exe(name.as_bytes()) && proton_parent(pid))));
-        if !is_game {
+        if !matched {
             return None;
         }
         let (profile, scheduler, tuning) = match rule {
@@ -45,7 +45,7 @@ impl Matcher {
                 self.config.default_tuning.clone(),
             ),
         };
-        Some(Game {
+        Some(Process {
             name,
             profile,
             scheduler,
@@ -138,7 +138,7 @@ mod tests {
 
         assert!(
             mentions_it,
-            "the child should mention the game in its cmdline"
+            "the child should mention the process in its cmdline"
         );
         assert!(!detected, "but merely mentioning it is not being it");
     }

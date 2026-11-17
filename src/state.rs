@@ -1,4 +1,4 @@
-use crate::game::Game;
+use crate::detect::Process;
 use crate::knob::{self, Snapshot};
 use crate::{proc, scx};
 use anyhow::Result;
@@ -15,7 +15,7 @@ const RESTORE_GRACE: Duration = Duration::from_secs(5);
 pub struct State {
     pub snapshot: Snapshot,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub game: Option<String>,
+    pub process: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scheduler: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -69,7 +69,7 @@ pub enum Start {
 pub struct Engine {
     active: HashSet<u32>,
     snapshot: Option<Snapshot>,
-    game: Option<String>,
+    process: Option<String>,
     profile: Option<String>,
     scheduler: Option<String>,
     base_scheduler: Option<String>,
@@ -85,11 +85,11 @@ impl Engine {
         }
     }
 
-    pub fn on_game_start(&mut self, pid: u32, game: &Game) -> Start {
+    pub fn on_process_start(&mut self, pid: u32, process: &Process) -> Start {
         self.pending_off = None;
         let newly = self.active.insert(pid);
         if self.snapshot.is_none() {
-            self.engage(game);
+            self.engage(process);
             Start::Engaged
         } else if newly {
             Start::Added
@@ -146,14 +146,14 @@ impl Engine {
         }
     }
 
-    fn engage(&mut self, game: &Game) {
-        self.snapshot = Some(knob::engage(&game.tuning.knobs()).unwrap_or_default());
-        self.game = Some(game.name.clone());
-        self.profile = game.profile.clone();
+    fn engage(&mut self, process: &Process) {
+        self.snapshot = Some(knob::engage(&process.tuning.knobs()).unwrap_or_default());
+        self.process = Some(process.name.clone());
+        self.profile = process.profile.clone();
 
         self.scheduler = None;
         self.scx_managed = false;
-        if let Some(sched) = &game.scheduler
+        if let Some(sched) = &process.scheduler
             && (self.base_scheduler.is_some() || scx::is_idle())
         {
             match scx::load(sched, scx::Mode::Gaming) {
@@ -170,7 +170,7 @@ impl Engine {
     fn persist(&self) {
         let state = State {
             snapshot: self.snapshot.clone().unwrap_or_default(),
-            game: self.game.clone(),
+            process: self.process.clone(),
             scheduler: self.scheduler.clone(),
             profile: self.profile.clone(),
         };
@@ -191,7 +191,7 @@ impl Engine {
             }
             self.scx_managed = false;
         }
-        self.game = None;
+        self.process = None;
         self.profile = None;
         self.scheduler = None;
         self.pending_off = None;

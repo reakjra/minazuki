@@ -2,13 +2,13 @@ games = []                 # extra game process names on top of the built-ins
 ignore = []                # extra processes to never treat as a game
 
 [startup]                  # applied once when the daemon starts, never restored
-# scheduler = "scx_flash"  # scx scheduler while no game runs (games switch back to it on exit)
+# scheduler = "scx_flash"  # scx scheduler while nothing is engaged
 # cpu_turbo = false        # true = on, false = off
 # cpu_freq = "4.5G"        # any of: "4500M", "4.5G", "4500000K" - all the same
 # cpu_pl1 = "125W"         # rapl long_term package limit, "125" works too
 # cpu_pl2 = "181W"         # rapl short_term package limit
 
-[defaults]                 # applied to any detected game with no [[game]] block
+[defaults]                 # applied to any detected game with no [[process]] block
 # scheduler = "scx_lavd"   # scx scheduler to load (scxctl list)
 # cpu_governor = true      # toggle the performance governor + EPP (on by default)
 # cpu_turbo = true
@@ -16,16 +16,16 @@ ignore = []                # extra processes to never treat as a game
 # cpu_pl1 = "150W"
 # cpu_pl2 = "200W"
 
-# per-game overrides.
+# per-process overrides for games or anything else.
 # path is matched as a substring of the process command line so an install folder works as well as an exe name.
 # anything left out falls back to [defaults].
 
-# [[game]]
+# [[process]]
 # path = "Black Myth Wukong"
 # scheduler = "scx_cake"
 # cpu_pl1 = "150W"
 #
-# [[game]]
+# [[process]]
 # path = "zenlesszonezero.exe"
 # cpu_turbo = false
 # cpu_freq = "3.5G"

@@ -91,7 +91,7 @@ struct UserConfig {
     #[serde(default)]
     defaults: Profile,
     #[serde(default)]
-    game: Vec<Profile>,
+    process: Vec<Profile>,
 }
 
 pub struct Rule {
@@ -149,10 +149,10 @@ impl Config {
             .with_context(blame)?
             .over(&config.default_tuning);
 
-        for entry in user.game {
+        for entry in user.process {
             let path = entry
                 .path
-                .with_context(|| format!("a [[game]] block is missing `path` ({})", blame()))?;
+                .with_context(|| format!("a [[process]] block is missing `path` ({})", blame()))?;
             let tuning = entry.tweaks.parse().with_context(blame)?;
             config.rules.push(Rule {
                 path: path.to_lowercase(),

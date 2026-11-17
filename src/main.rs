@@ -1,7 +1,7 @@
 mod config;
 mod cpufreq;
+mod detect;
 mod freq;
-mod game;
 mod inotify;
 mod knob;
 mod pl;
@@ -72,8 +72,8 @@ fn cmd_status() -> Result<()> {
 
 fn engaged_line(st: &state::State) -> String {
     let mut line = ui::good(&ui::mark(ui::Mark::Engaged));
-    if let Some(game) = &st.game {
-        line.push_str(&format!("  {}", ui::good(game)));
+    if let Some(process) = &st.process {
+        line.push_str(&format!("  {}", ui::good(process)));
     }
     if let Some(scheduler) = &st.scheduler {
         line.push_str(&format!("  {}", ui::dim(&format!("via {scheduler}"))));
@@ -218,7 +218,7 @@ fn cmd_daemon() -> Result<()> {
             ui::dim(&format!("startup: applied {applied} setting(s)"))
         );
     }
-    let mut matcher = game::Matcher::new(config);
+    let mut matcher = detect::Matcher::new(config);
 
     let scx_ready = scx::available();
     if wants_scx && !scx_ready {
@@ -253,7 +253,7 @@ fn cmd_daemon() -> Result<()> {
         if RELOAD.swap(false, Ordering::SeqCst) || edited {
             match config::Config::load() {
                 Ok(cfg) => {
-                    matcher = game::Matcher::new(cfg);
+                    matcher = detect::Matcher::new(cfg);
                     println!("{}", ui::dim("config reloaded"));
                     adopt_running(&matcher, &mut engine);
                 }
@@ -263,11 +263,11 @@ fn cmd_daemon() -> Result<()> {
         for event in watcher.recv()? {
             match event {
                 watcher::Event::Exec { pid } => {
-                    if let Some(game) = matcher.detect(pid) {
-                        match engine.on_game_start(pid, &game) {
+                    if let Some(process) = matcher.detect(pid) {
+                        match engine.on_process_start(pid, &process) {
                             state::Start::Engaged => {
-                                log_game(&game.name, pid);
-                                match &game.scheduler {
+                                log_process(&process.name, pid);
+                                match &process.scheduler {
                                     Some(sched) => ui::done(
                                         &ui::mark(ui::Mark::Engaged),
                                         &format!("(scheduler {sched})"),
@@ -275,23 +275,23 @@ fn cmd_daemon() -> Result<()> {
                                     None => println!("{}", ui::good(&ui::mark(ui::Mark::Engaged))),
                                 }
                             }
-                            state::Start::Added => log_game(&game.name, pid),
+                            state::Start::Added => log_process(&process.name, pid),
                             state::Start::Known => {}
                         }
                     }
                 }
                 watcher::Event::Exit { pid } => {
                     if engine.on_exit(pid) {
-                        println!("{}", ui::dim("no games left, holding before restore"));
+                        log_holding();
                     }
                 }
             }
         }
         if engine.prune_dead() {
-            println!("{}", ui::dim("no games left, holding before restore"));
+            log_holding();
         }
         if engine.tick() {
-            ui::done(&ui::mark(ui::Mark::Restored), "(games closed)");
+            ui::done(&ui::mark(ui::Mark::Restored), "(processes closed)");
         }
     }
     engine.shutdown();
@@ -312,25 +312,29 @@ fn start_base_scheduler(scheduler: String) -> Option<String> {
     }
 }
 
-fn adopt_running(matcher: &game::Matcher, engine: &mut state::Engine) {
+fn adopt_running(matcher: &detect::Matcher, engine: &mut state::Engine) {
     for pid in proc::pids() {
-        if let Some(game) = matcher.detect(pid)
-            && let state::Start::Engaged = engine.on_game_start(pid, &game)
+        if let Some(process) = matcher.detect(pid)
+            && let state::Start::Engaged = engine.on_process_start(pid, &process)
         {
             ui::done(
                 &ui::mark(ui::Mark::Engaged),
-                &format!("({} already running)", game.name),
+                &format!("({} already running)", process.name),
             );
         }
     }
 }
 
-fn log_game(name: &str, pid: u32) {
+fn log_process(name: &str, pid: u32) {
     println!(
         "{} {}",
-        ui::good("game"),
+        ui::good("process"),
         ui::dim(&format!("{name} ({pid})"))
     );
+}
+
+fn log_holding() {
+    println!("{}", ui::dim("no processes left, holding before restore"));
 }
 
 fn cmd_cpu(knob: Option<&str>, value: Option<&str>) -> Result<()> {
@@ -521,7 +525,7 @@ mod tests {
     #[test]
     fn engaged_line_tags_the_matched_profile() {
         let st = state::State {
-            game: Some("Wukong.exe".into()),
+            process: Some("Wukong.exe".into()),
             scheduler: Some("scx_lavd".into()),
             profile: Some("black myth - wukong".into()),
             ..Default::default()
@@ -538,7 +542,7 @@ mod tests {
     #[test]
     fn engaged_line_stays_short_on_the_default_profile() {
         let st = state::State {
-            game: Some("cs2".into()),
+            process: Some("cs2".into()),
             scheduler: Some("scx_cake".into()),
             ..Default::default()
         };
