@@ -62,6 +62,14 @@ fn parse_field<T>(
 }
 
 #[derive(Deserialize, Default)]
+struct Startup {
+    #[serde(default)]
+    scheduler: Option<String>,
+    #[serde(default, flatten)]
+    tweaks: Tweaks,
+}
+
+#[derive(Deserialize, Default)]
 struct Profile {
     #[serde(default)]
     path: Option<String>,
@@ -79,7 +87,7 @@ struct UserConfig {
     #[serde(default)]
     ignore: Vec<String>,
     #[serde(default)]
-    startup: Tweaks,
+    startup: Startup,
     #[serde(default)]
     defaults: Profile,
     #[serde(default)]
@@ -95,6 +103,7 @@ pub struct Rule {
 pub struct Config {
     pub system_exes: Vec<String>,
     pub game_names: Vec<String>,
+    pub startup_scheduler: Option<String>,
     pub startup: Tuning,
     pub default_scheduler: Option<String>,
     pub default_tuning: Tuning,
@@ -110,6 +119,7 @@ impl Config {
                 .iter()
                 .map(|s| s.to_lowercase())
                 .collect(),
+            startup_scheduler: None,
             startup: Tuning::default(),
             default_scheduler: None,
             default_tuning: Tuning {
@@ -129,7 +139,8 @@ impl Config {
 
         config.game_names.extend(lowered(user.games));
         config.system_exes.extend(lowered(user.ignore));
-        config.startup = user.startup.parse().with_context(blame)?;
+        config.startup_scheduler = user.startup.scheduler;
+        config.startup = user.startup.tweaks.parse().with_context(blame)?;
         config.default_scheduler = user.defaults.scheduler;
         config.default_tuning = user
             .defaults
@@ -153,7 +164,9 @@ impl Config {
     }
 
     pub fn wants_scx(&self) -> bool {
-        self.default_scheduler.is_some() || self.rules.iter().any(|r| r.scheduler.is_some())
+        self.startup_scheduler.is_some()
+            || self.default_scheduler.is_some()
+            || self.rules.iter().any(|r| r.scheduler.is_some())
     }
 }
 

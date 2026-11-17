@@ -62,6 +62,7 @@ fn main() -> Result<()> {
 
 fn cmd_status() -> Result<()> {
     cmd_cpu_summary()?;
+    row("scx scheduler", scx_state());
     match state::load()? {
         Some(st) => println!("\n{}", engaged_line(&st)),
         None => println!("\n{}", ui::dim(&ui::mark(ui::Mark::Idle))),
@@ -91,9 +92,12 @@ fn cmd_config() -> Result<()> {
         println!("  {}", ui::dim("(no file yet, showing built-in defaults)"));
     }
 
-    if !config.startup.is_empty() {
+    if config.startup_scheduler.is_some() || !config.startup.is_empty() {
         println!("\n{}", ui::head("startup"));
         println!("  {}", ui::dim("applied once at boot, never restored"));
+        if let Some(sched) = &config.startup_scheduler {
+            row("scheduler", ui::good(sched));
+        }
         print_rows(&config.startup);
     }
 
@@ -125,6 +129,14 @@ fn turbo_state() -> String {
         Some(true) => ui::good("on"),
         Some(false) => ui::dim("off"),
         None => ui::dim("n/a"),
+    }
+}
+
+fn scx_state() -> String {
+    match scx::status() {
+        scx::Status::Running(scheduler) => ui::good(&scheduler),
+        scx::Status::Idle => ui::dim("none"),
+        scx::Status::Unavailable => ui::dim("n/a"),
     }
 }
 
@@ -198,6 +210,7 @@ fn cmd_daemon() -> Result<()> {
     }
     let config = config::Config::load()?;
     let wants_scx = config.wants_scx();
+    let startup_scheduler = config.startup_scheduler.clone();
     if !config.startup.is_empty() {
         let applied = knob::engage(&config.startup.knobs())?.len();
         println!(
@@ -206,9 +219,9 @@ fn cmd_daemon() -> Result<()> {
         );
     }
     let mut matcher = game::Matcher::new(config);
-    let mut engine = state::Engine::default();
 
-    if wants_scx && !scx::available() {
+    let scx_ready = scx::available();
+    if wants_scx && !scx_ready {
         println!(
             "{}",
             ui::dim(
@@ -219,6 +232,10 @@ fn cmd_daemon() -> Result<()> {
     if state::recover() {
         println!("{}", ui::dim("recovered stale state from a previous run"));
     }
+    let base_scheduler = startup_scheduler
+        .filter(|_| scx_ready)
+        .and_then(start_base_scheduler);
+    let mut engine = state::Engine::new(base_scheduler);
     adopt_running(&matcher, &mut engine);
 
     let watcher = watcher::Watcher::new()?;
@@ -280,6 +297,19 @@ fn cmd_daemon() -> Result<()> {
     engine.shutdown();
     println!("{}", ui::dim("stopped, cpu restored"));
     Ok(())
+}
+
+fn start_base_scheduler(scheduler: String) -> Option<String> {
+    match scx::load(&scheduler, scx::Mode::Auto) {
+        Ok(()) => {
+            println!("{}", ui::dim(&format!("startup: scheduler {scheduler}")));
+            Some(scheduler)
+        }
+        Err(e) => {
+            eprintln!("minazuki: startup scheduler failed: {e}");
+            None
+        }
+    }
 }
 
 fn adopt_running(matcher: &game::Matcher, engine: &mut state::Engine) {

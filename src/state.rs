@@ -72,11 +72,19 @@ pub struct Engine {
     game: Option<String>,
     profile: Option<String>,
     scheduler: Option<String>,
+    base_scheduler: Option<String>,
     scx_managed: bool,
     pending_off: Option<Instant>,
 }
 
 impl Engine {
+    pub fn new(base_scheduler: Option<String>) -> Self {
+        Self {
+            base_scheduler,
+            ..Self::default()
+        }
+    }
+
     pub fn on_game_start(&mut self, pid: u32, game: &Game) -> Start {
         self.pending_off = None;
         let newly = self.active.insert(pid);
@@ -146,9 +154,9 @@ impl Engine {
         self.scheduler = None;
         self.scx_managed = false;
         if let Some(sched) = &game.scheduler
-            && scx::is_idle()
+            && (self.base_scheduler.is_some() || scx::is_idle())
         {
-            match scx::start_gaming(sched) {
+            match scx::load(sched, scx::Mode::Gaming) {
                 Ok(()) => {
                     self.scx_managed = true;
                     self.scheduler = Some(sched.clone());
@@ -174,8 +182,12 @@ impl Engine {
             knob::restore(&snapshot);
         }
         if self.scx_managed {
-            if let Err(e) = scx::stop() {
-                eprintln!("minazuki: scx stop failed: {e}");
+            let restored = match &self.base_scheduler {
+                Some(base) => scx::load(base, scx::Mode::Auto),
+                None => scx::stop(),
+            };
+            if let Err(e) = restored {
+                eprintln!("minazuki: scx restore failed: {e}");
             }
             self.scx_managed = false;
         }

@@ -2,6 +2,7 @@ games = []                 # extra game process names on top of the built-ins
 ignore = []                # extra processes to never treat as a game
 
 [startup]                  # applied once when the daemon starts, never restored
+# scheduler = "scx_flash"  # scx scheduler while no game runs (games switch back to it on exit)
 # cpu_turbo = false        # true = on, false = off
 # cpu_freq = "4.5G"        # any of: "4500M", "4.5G", "4500000K" - all the same
 # cpu_pl1 = "125W"         # rapl long_term package limit, "125" works too

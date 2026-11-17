@@ -104,6 +104,7 @@ mod tests {
         Matcher::new(Config {
             system_exes: Vec::new(),
             game_names: Vec::new(),
+            startup_scheduler: None,
             startup: Tuning::default(),
             default_scheduler: None,
             default_tuning: Tuning::default(),
